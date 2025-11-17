@@ -4,9 +4,9 @@ var stdout_buffer: [1024]u8 = undefined;
 var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
 const stdout = &stdout_writer.interface;
 
-const String = []const u8;
+const String = @import("string").String;
 
-pub fn jsonView(allocator: std.mem.Allocator, filename: String) !void {
+pub fn jsonView(allocator: std.mem.Allocator, filename: [:0]const u8) !void {
     const json_data = try std.fs.cwd().readFileAlloc(allocator, filename, 10 * 1024 * 1024);
     defer allocator.free(json_data);
 
@@ -16,59 +16,79 @@ pub fn jsonView(allocator: std.mem.Allocator, filename: String) !void {
     };
     defer parsed.deinit();
 
-    try printJsonObject(parsed.value, 0);
+    try printJsonObject(allocator, parsed.value);
 }
 
-fn indent(depth: usize) !void {
+fn printJsonObject(allocator: std.mem.Allocator, value: json.Value) !void {
+    var s = String.init(allocator);
+    defer s.deinit();
+
+    try formatJsonObject(value, &s, 0, true);
+
+    try stdout.writeAll(s.str());
+    try stdout.flush();
+}
+
+fn indent(str: *String, depth: usize) !void {
     for (0..depth) |_| {
-        try stdout.print("  ", .{});
+        try str.concat("  ");
     }
 }
 
-fn printJsonObject(value: json.Value, depth: usize) !void {
-    try indent(depth);
+fn formatJsonObject(value: json.Value, str: *String, depth: usize, root: bool) !void {
+    if (root and depth > 0) try indent(str, depth);
 
+    var buf: [1024]u8 = undefined;
     switch (value) {
-        .null => |_| try stdout.print("null", .{}),
-        .bool => |b| try stdout.print("{}", .{b}),
-        .integer => |i| try stdout.print("{d}", .{i}),
-        .float => |f| try stdout.print("{d}", .{f}),
-        .string => |s| try stdout.print("\"{s}\"", .{s}),
+        .null => |_| try str.concat("null"),
+        .bool => |b| try str.concat(if (b) "true" else "false"),
+        .integer => |n| {
+            const formatted = std.fmt.bufPrint(&buf, "{d}", .{n}) catch unreachable;
+            try str.concat(formatted);
+        },
+        .float => |n| {
+            const formatted = std.fmt.bufPrint(&buf, "{d}", .{n}) catch unreachable;
+            try str.concat(formatted);
+        },
+        .string, .number_string => |s| {
+            try str.concat("\"");
+            try str.concat(s);
+            try str.concat("\"");
+        },
         .array => |a| {
-            try stdout.print("[\n", .{});
+            try str.concat("[\n");
+
             for (0..a.items.len) |i| {
-                try printJsonObject(a.items[i], depth + 1);
-                if (i < a.items.len - 1) {
-                    try stdout.print(",\n", .{});
-                } else {
-                    try stdout.print("\n", .{});
-                }
+                try indent(str, depth + 1);
+                try formatJsonObject(a.items[i], str, depth + 1, false);
+                if (i < a.items.len - 1) try str.concat(",");
+                try str.concat("\n");
             }
-            try indent(depth);
-            try stdout.print("]", .{});
+
+            try indent(str, depth);
+            try str.concat("]");
         },
         .object => |obj| {
-            try stdout.print("{{\n", .{});
+            try str.concat("{\n");
+
             var o = obj.iterator();
             var i: usize = 0;
             while (o.next()) |p| : (i += 1) {
-                try indent(depth + 1);
-                try stdout.print("\"{s}\": ", .{p.key_ptr.*});
-                try printJsonObject(p.value_ptr.*, depth + 1);
+                try indent(str, depth + 1);
+                try formatJsonObject(.{ .string = p.key_ptr.* }, str, depth + 1, false);
+                try str.concat(": ");
+                try formatJsonObject(p.value_ptr.*, str, depth + 1, false);
+
                 if (i < o.len - 1) {
-                    try stdout.print(",\n", .{});
-                } else {
-                    try stdout.print("\n", .{});
+                    try str.concat(",");
                 }
+                try str.concat("\n");
             }
-            try indent(depth);
-            try stdout.print("}}", .{});
+
+            try indent(str, depth);
+            try str.concat("}");
         },
-        else => try stdout.print("unknown", .{}),
     }
 
-    if (depth == 0) {
-        try stdout.print("\n", .{});
-    }
-    try stdout.flush();
+    if (root) try str.concat("\n");
 }
