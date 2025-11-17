@@ -31,8 +31,14 @@ fn printJsonObject(allocator: std.mem.Allocator, value: json.Value) !void {
 
 fn indent(str: *String, depth: usize) !void {
     for (0..depth) |_| {
-        try str.concat("  ");
+        str.concat("  ") catch |err| return err;
     }
+}
+
+fn quote(str: *String, s: []const u8) !void {
+    try str.concat("\"");
+    try str.concat(s);
+    try str.concat("\"");
 }
 
 fn formatJsonObject(value: json.Value, str: *String, depth: usize, root: bool) !void {
@@ -40,8 +46,8 @@ fn formatJsonObject(value: json.Value, str: *String, depth: usize, root: bool) !
 
     var buf: [1024]u8 = undefined;
     switch (value) {
-        .null => |_| try str.concat("null"),
-        .bool => |b| try str.concat(if (b) "true" else "false"),
+        .null => |_| try str.concat("\x1b[2mnull\x1b[m"),
+        .bool => |b| try str.concat(if (b) "\x1b[33mtrue\x1b[m" else "\x1b[33mfalse\x1b[m"),
         .integer => |n| {
             const formatted = std.fmt.bufPrint(&buf, "{d}", .{n}) catch unreachable;
             try str.concat(formatted);
@@ -51,9 +57,9 @@ fn formatJsonObject(value: json.Value, str: *String, depth: usize, root: bool) !
             try str.concat(formatted);
         },
         .string, .number_string => |s| {
-            try str.concat("\"");
-            try str.concat(s);
-            try str.concat("\"");
+            try str.concat("\x1b[32m");
+            try quote(str, s);
+            try str.concat("\x1b[m");
         },
         .array => |a| {
             try str.concat("[\n");
@@ -75,8 +81,25 @@ fn formatJsonObject(value: json.Value, str: *String, depth: usize, root: bool) !
             var i: usize = 0;
             while (o.next()) |p| : (i += 1) {
                 try indent(str, depth + 1);
-                try formatJsonObject(.{ .string = p.key_ptr.* }, str, depth + 1, false);
-                try str.concat(": ");
+
+                switch (depth % 4) {
+                    0 => |_| {
+                        try str.concat("\x1b[34m");
+                    },
+                    1 => |_| {
+                        try str.concat("\x1b[36m");
+                    },
+                    2 => |_| {
+                        try str.concat("\x1b[35m");
+                    },
+                    3 => |_| {
+                        try str.concat("\x1b[31m");
+                    },
+                    else => unreachable,
+                }
+
+                try quote(str, p.key_ptr.*);
+                try str.concat("\x1b[m: ");
                 try formatJsonObject(p.value_ptr.*, str, depth + 1, false);
 
                 if (i < o.len - 1) {
